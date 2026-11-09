@@ -33,13 +33,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.PROFILE_TOKEN || github.token }}
         run: python3 scripts/generate.py
 
-      - name: Commit if anything changed
+      - name: Commit if anything visible changed
         run: |
-          git add -A
-          if git diff --cached --quiet; then
-            echo "Nothing changed."
+          # Exact star counts in data/ drift every day; only commit when the
+          # rendered profile (README, cards, header, stats) or config changes.
+          if [ -z "$(git status --porcelain -- README.md assets config.json)" ]; then
+            echo "No visible changes."
             exit 0
           fi
+          git add -A
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: refresh profile cards"
