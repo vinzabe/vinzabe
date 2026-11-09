@@ -1,0 +1,21 @@
+{
+  "user": "vinzabe",
+  "name": "Grant Abejar",
+  "tagline": "vulnerability research · AI security tooling · reverse engineering",
+  "star_list": "security-contribution",
+  "card_link": "contribution",
+  "contributions": [
+    "nuxt/nuxt",
+    "SuiteCRM/SuiteCRM-Core",
+    "delvedor/find-my-way",
+    "elysiajs/elysia",
+    "php/php-src",
+    "excon/excon",
+    "python/cpython",
+    "calcom/cal.diy",
+    "thedotmack/claude-mem",
+    "cline/cline",
+    "morluto/rea"
+  ],
+  "overrides": {}
+}
