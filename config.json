@@ -22,5 +22,6 @@
     "honojs/hono",
     "pnpm/pnpm"
   ],
+  "cves": {},
   "overrides": {}
 }

@@ -8,10 +8,18 @@ README.md. Standard library only, so the workflow needs no dependencies.
     python3 scripts/generate.py                        # anonymous API, 60 req/h
     GITHUB_TOKEN=$(gh auth token) python3 scripts/generate.py
 
-Projects come from the star list named in config.json when the token can read
-it (a private list is only visible to its owner's token), otherwise from the
-"contributions" array in config.json. Repos in "extra_contributions" are shown
-as well, whether or not they're on the list.
+Projects come from the star list named in config.json: through the API when the
+token can see it (a private list is only visible to its owner's token), else
+from the list's public page, else from the "contributions" array in config.json,
+which every successful read keeps in sync. Repos in "extra_contributions" are
+shown as well, whether or not they're on the list.
+
+A project's card switches from "Reported privately" to the full write-up once
+an advisory crediting you is published there, and its heading becomes the CVE
+ID once one is assigned. For projects that publish CVEs outside GitHub
+(CPython, for one), list the IDs under "cves" in config.json, for example
+{"python/cpython": ["CVE-2026-12345"]}: each one appears once its CVE record is
+public and stays hidden while the ID is only reserved.
 """
 
 from __future__ import annotations
@@ -169,24 +177,57 @@ def featured_repos() -> list[str]:
 
 
 def listed_repos() -> list[str]:
-    """Repos from the star list if this token can see it, else config.json."""
+    """Repos on the star list (API, else its public page), else config.json."""
     slug, saved = CONFIG.get("star_list"), CONFIG.get("contributions", [])
-    if not (slug and TOKEN):
+    if not slug:
         return saved
-    try:
-        for lst in graphql(LIST_QUERY, login=LOGIN)["user"]["lists"]["nodes"]:
-            if lst["slug"] == slug:
-                repos = [n["nameWithOwner"] for n in lst["items"]["nodes"] if n.get("nameWithOwner")]
-                if repos:
-                    log(f"star list '{slug}': {len(repos)} repos")
-                    if sorted(repos) != sorted(saved):  # keep the fallback in sync
-                        CONFIG["contributions"] = repos
-                        CONFIG_PATH.write_text(json.dumps(CONFIG, indent=2, ensure_ascii=False) + "\n")
-                    return repos
-        log(f"star list '{slug}' isn't visible to this token; using config.json")
-    except Exception as exc:  # noqa: BLE001 - any failure falls back to config.json
-        log(f"star list lookup failed ({exc}); using config.json")
-    return saved
+    repos, source = [], "API"
+    if TOKEN:
+        try:
+            for lst in graphql(LIST_QUERY, login=LOGIN)["user"]["lists"]["nodes"]:
+                if lst["slug"] == slug:
+                    repos = [n["nameWithOwner"] for n in lst["items"]["nodes"] if n.get("nameWithOwner")]
+        except Exception as exc:  # noqa: BLE001 - the public page is tried next
+            log(f"star list API lookup failed ({exc})")
+    if not repos:
+        repos, source = star_list_page(slug), "public page"
+    if not repos:
+        log(f"star list '{slug}' isn't readable (a private list needs its owner's token); using config.json")
+        return saved
+    log(f"star list '{slug}' ({source}): {len(repos)} repos")
+    if sorted(repos) != sorted(saved):  # keep the fallback in sync
+        CONFIG["contributions"] = repos
+        CONFIG_PATH.write_text(json.dumps(CONFIG, indent=2, ensure_ascii=False) + "\n")
+    return repos
+
+
+def star_list_page(slug: str) -> list[str]:
+    """Repos on a public star list, read from its web page: lists have no REST endpoint and
+    GITHUB_TOKEN can't necessarily see them through GraphQL. Empty if the page can't be read,
+    including when the repos found don't add up to the count the page states, so a change
+    to GitHub's markup falls back to config.json instead of dropping cards."""
+    url, repos, expected = f"https://github.com/stars/{LOGIN}/lists/{slug}", [], None
+    for _ in range(20):  # 30 repos per page
+        try:
+            page = fetch(url, accept="text/html")[0].decode("utf-8", "replace")
+        except (urllib.error.URLError, OSError) as exc:  # a private list is a 404 here
+            log(f"star list page unavailable ({exc})")
+            return []
+        head, found, section = page.partition('id="user-list-repositories"')
+        if not found:
+            return []
+        if expected is None:
+            counts = re.findall(r"(\d[\d,]*)\s+repositor(?:y|ies)\b", head)
+            expected = int(counts[-1].replace(",", "")) if counts else -1
+        repos += re.findall(r'<h2 class="h3">\s*<a href="/([\w.-]+/[\w.-]+)"', section)
+        nxt = re.search(r'<a class="next_page"[^>]*href="([^"]+)"', section)
+        if not nxt:
+            break
+        url = urllib.parse.urljoin(url, html.unescape(nxt.group(1)))
+    if len(repos) != expected:
+        log(f"star list page: found {len(repos)} repos but the page says {expected}; not using it")
+        return []
+    return repos
 
 
 def my_issues_and_prs() -> dict[str, list[dict]] | None:
@@ -265,6 +306,47 @@ def normalize_advisory(adv: dict, role: str, repo: dict) -> dict:
     }
 
 
+def cve_advisory(cve_id: str, prev: dict) -> dict | None:
+    """A CVE a project published outside GitHub, from its public CVE record. None while the
+    ID is only reserved (there's no public record yet), so nothing undisclosed shows early."""
+    cve_id = cve_id.strip().upper()
+    last = next((a for a in prev.get("advisories", []) if a.get("cve") == cve_id), None)
+    try:
+        rec = json.loads(fetch(f"https://cveawg.mitre.org/api/cve/{cve_id}", accept="application/json")[0])
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        log(f"{cve_id}: CVE record unavailable ({exc}); keeping the last snapshot")
+        return last
+    except (urllib.error.URLError, OSError) as exc:
+        log(f"{cve_id}: CVE record unavailable ({exc}); keeping the last snapshot")
+        return last
+    meta, containers = rec.get("cveMetadata") or {}, rec.get("containers") or {}
+    if meta.get("state") != "PUBLISHED":
+        return None
+    cna = containers.get("cna") or {}
+    metrics = [m for c in [cna, *(containers.get("adp") or [])] for m in c.get("metrics") or []]
+    cvss = next((m[k] for k in ("cvssV4_0", "cvssV3_1", "cvssV3_0") for m in metrics if k in m), {})
+    score = cvss.get("baseScore")
+    severity = (cvss.get("baseSeverity") or "").lower()
+    if score is not None and severity not in SEVERITY_RANK:
+        severity = next((s for s, floor in (("critical", 9), ("high", 7), ("medium", 4), ("low", 0.1))
+                         if score >= floor), "")
+    desc = next((d.get("value", "") for d in cna.get("descriptions") or [] if d.get("lang", "").startswith("en")), "")
+    return {
+        "kind": "advisory",
+        "id": cve_id,
+        "ghsa": None,
+        "cve": cve_id,
+        "severity": severity if severity in SEVERITY_RANK else "",  # "" = no CVSS score published
+        "score": score,
+        "title": (cna.get("title") or re.split(r"(?<=[.!?])\s", desc.strip(), maxsplit=1)[0]).strip(),
+        "url": f"https://www.cve.org/CVERecord?id={cve_id}",
+        "date": (meta.get("datePublished") or "")[:10],
+        "role": "reporter",
+    }
+
+
 def avatar_data_uri(url: str) -> str | None:
     try:
         body, _ = fetch(url + ("&" if "?" in url else "?") + "s=80", accept="image/*")
@@ -291,6 +373,20 @@ def collect(full: str, items: list[dict] | None, prev: dict | None) -> dict:
     except urllib.error.HTTPError as exc:
         advisories = prev.get("advisories", [])
         log(f"{full}: advisories unavailable ({exc.code}); keeping {len(advisories)} from the last snapshot")
+    for a in advisories:
+        if a.get("ghsa") and not a.get("cve"):
+            # A CVE can be assigned after publication; GitHub's global advisory database has it first.
+            try:
+                a["cve"] = api(f"/advisories/{a['ghsa']}").get("cve_id")
+            except urllib.error.HTTPError:
+                pass  # not in the global database (yet)
+            a["id"] = a["cve"] or a["id"]
+    # CVEs this project published outside GitHub (config.json "cves"), once their record is public.
+    known = {a["cve"] for a in advisories if a.get("cve")}
+    for cve_id in next((ids for name, ids in (CONFIG.get("cves") or {}).items()
+                        if name.lower() == repo["full_name"].lower()), []):
+        if cve_id.strip().upper() not in known and (entry := cve_advisory(cve_id, prev)):
+            advisories.append(entry)
     try:
         commits = len(api(f"/repos/{repo['full_name']}/commits", author=LOGIN, per_page=100))
     except urllib.error.HTTPError:
@@ -331,14 +427,15 @@ def short_num(n: int) -> str:
 def primary(c: dict) -> dict:
     """The one contribution a card leads with, plus how many others there are."""
     o = c.get("override") or {}
-    advs = sorted(c["advisories"], key=lambda a: (SEVERITY_RANK[a["severity"]], a["date"]), reverse=True)
+    advs = sorted(c["advisories"], key=lambda a: (SEVERITY_RANK.get(a["severity"], 0), a["date"]), reverse=True)
     resolved = [i for i in c["items"] if i["status"] in ("merged", "fixed")]
     opened = [i for i in c["items"] if i["status"] == "open"]
     total = len(advs) + len(c["items"])
     if advs:
         a = advs[0]
-        badge = a["severity"].upper() + (f" {float(a['score']):.1f}" if a.get("score") else "")
-        p = dict(icon="shield", heading=a["id"], badge=badge, color=a["severity"], title=a["title"],
+        badge = (a["severity"].upper() + (f" {float(a['score']):.1f}" if a.get("score") else "")
+                 if a["severity"] else "PUBLISHED")  # a CVE record without a CVSS score
+        p = dict(icon="shield", heading=a["id"], badge=badge, color=a["severity"] or "accent2", title=a["title"],
                  url=a["url"], meta=f"{CREDIT_VERB.get(a['role'], 'credited')} {month(a['date'])}")
     elif resolved or opened:
         i = (resolved or opened)[0]
@@ -747,7 +844,7 @@ def contributions_block(cards: list[dict], tiles: list[tuple[str, str]]) -> str:
         for a in c["advisories"]:
             ids = " · ".join(x for x in (a["cve"], a["ghsa"]) if x)
             rows.append((a["date"], c, f"[{ids}]({a['url']}) {md_cell(a['title'])}",
-                         f"{SEVERITY_DOT[a['severity']]}&nbsp;{a['severity'].capitalize()}"))
+                         f"{SEVERITY_DOT.get(a['severity'], '⚪')}&nbsp;{(a['severity'] or 'unscored').capitalize()}"))
         for i in c["items"]:
             label = f"PR&nbsp;{i['id']}" if i["kind"] == "pr" else f"Issue&nbsp;{i['id']}"
             status = {"merged": "🟣&nbsp;Merged", "fixed": "✅&nbsp;Fixed", "open": "⏳&nbsp;Open"}[i["status"]]
@@ -797,7 +894,7 @@ def main() -> None:
     for c in cards:
         c["primary"] = primary(c)
     cards.sort(key=lambda c: (not c["primary"].get("private"),
-                              max([SEVERITY_RANK[a["severity"]] for a in c["advisories"]] or [0]),
+                              max([SEVERITY_RANK.get(a["severity"], 0) for a in c["advisories"]] or [0]),
                               sum(i["status"] in ("merged", "fixed") for i in c["items"]) + len(c["advisories"]),
                               c["stars"]), reverse=True)
 

@@ -59,4 +59,4 @@ Sent through GitHub's private vulnerability reporting. Details stay private unti
   </picture>
 </p>
 
-<p align="center"><sub>Cards are built from the GitHub API by <a href="scripts/generate.py">scripts/generate.py</a> and refreshed daily by GitHub Actions.</sub></p>
+<p align="center"><sub>Cards are built from the GitHub API by <a href="scripts/generate.py">scripts/generate.py</a> and refreshed every 6 hours by GitHub Actions.</sub></p>

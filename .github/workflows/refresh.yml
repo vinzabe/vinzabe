@@ -2,7 +2,8 @@ name: Refresh profile
 
 on:
   schedule:
-    - cron: "23 4 * * *" # daily
+    - cron: "23 4 * * *" # daily: cards and the contribution snake
+    - cron: "23 10,16,22 * * *" # cards only, so new advisories and CVEs show up within hours
   workflow_dispatch:
   push:
     branches: [main]
@@ -28,27 +29,36 @@ jobs:
 
       - name: Regenerate cards and README
         env:
-          # Optional PROFILE_TOKEN secret lets this read a private star list;
-          # without it the repos listed in config.json are used.
+          # The star list is read through the API or, when it's public, from its
+          # page. A private list needs its owner's token in the optional
+          # PROFILE_TOKEN secret; without either, config.json is used.
           GITHUB_TOKEN: ${{ secrets.PROFILE_TOKEN || github.token }}
         run: python3 scripts/generate.py
 
       - name: Commit if anything visible changed
         run: |
           # Exact star counts in data/ drift every day; only commit when the
-          # rendered profile (README, cards, header, stats) or config changes.
-          if [ -z "$(git status --porcelain -- README.md assets config.json)" ]; then
+          # rendered profile (README, cards, header, stats) or config changes...
+          if [ -n "$(git status --porcelain -- README.md assets config.json)" ]; then
+            msg="chore: refresh profile cards"
+          elif [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $(( 50 * 86400 )) ]; then
+            # ...or after 50 quiet days, because GitHub pauses scheduled
+            # workflows in repositories with no activity for 60 days.
+            msg="chore: refresh contribution data"
+          else
             echo "No visible changes."
             exit 0
           fi
           git add -A
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: refresh profile cards"
+          git commit --allow-empty -m "$msg"
           git push
 
   snake:
     name: Contribution snake
+    # The contribution graph only needs redrawing once a day.
+    if: github.event_name != 'schedule' || github.event.schedule == '23 4 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
