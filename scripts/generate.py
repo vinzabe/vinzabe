@@ -10,7 +10,8 @@ README.md. Standard library only, so the workflow needs no dependencies.
 
 Projects come from the star list named in config.json when the token can read
 it (a private list is only visible to its owner's token), otherwise from the
-"contributions" array in config.json.
+"contributions" array in config.json. Repos in "extra_contributions" are shown
+as well, whether or not they're on the list.
 """
 
 from __future__ import annotations
@@ -157,6 +158,17 @@ query($login: String!) {
 
 
 def featured_repos() -> list[str]:
+    """The star list's repos (or config.json "contributions" when the list can't be
+    read), then "extra_contributions", which the list sync never rewrites."""
+    repos, seen = [], set()
+    for full in listed_repos() + CONFIG.get("extra_contributions", []):
+        if full.lower() not in seen:
+            seen.add(full.lower())
+            repos.append(full)
+    return repos
+
+
+def listed_repos() -> list[str]:
     """Repos from the star list if this token can see it, else config.json."""
     slug, saved = CONFIG.get("star_list"), CONFIG.get("contributions", [])
     if not (slug and TOKEN):

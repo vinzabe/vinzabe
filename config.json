@@ -15,7 +15,12 @@
     "calcom/cal.diy",
     "thedotmack/claude-mem",
     "cline/cline",
-    "morluto/rea"
+    "morluto/rea",
+    "fosrl/pangolin"
+  ],
+  "extra_contributions": [
+    "honojs/hono",
+    "pnpm/pnpm"
   ],
   "overrides": {}
 }
