@@ -16,7 +16,9 @@
     "thedotmack/claude-mem",
     "cline/cline",
     "morluto/rea",
-    "fosrl/pangolin"
+    "fosrl/pangolin",
+    "pomerium/pomerium",
+    "tobychui/zoraxy"
   ],
   "extra_contributions": [
     "honojs/hono",
