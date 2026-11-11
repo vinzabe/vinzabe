@@ -19,7 +19,9 @@
     "fosrl/pangolin",
     "pomerium/pomerium",
     "tobychui/zoraxy",
-    "SinTan1729/chhoto-url"
+    "SinTan1729/chhoto-url",
+    "ActivityWatch/activitywatch",
+    "abhinavxd/libredesk"
   ],
   "extra_contributions": [
     "honojs/hono",
