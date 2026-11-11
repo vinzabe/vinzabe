@@ -18,7 +18,8 @@
     "morluto/rea",
     "fosrl/pangolin",
     "pomerium/pomerium",
-    "tobychui/zoraxy"
+    "tobychui/zoraxy",
+    "SinTan1729/chhoto-url"
   ],
   "extra_contributions": [
     "honojs/hono",
