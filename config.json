@@ -21,7 +21,8 @@
     "tobychui/zoraxy",
     "SinTan1729/chhoto-url",
     "ActivityWatch/activitywatch",
-    "abhinavxd/libredesk"
+    "abhinavxd/libredesk",
+    "donetick/donetick"
   ],
   "extra_contributions": [
     "honojs/hono",
