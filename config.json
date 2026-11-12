@@ -22,7 +22,13 @@
     "SinTan1729/chhoto-url",
     "ActivityWatch/activitywatch",
     "abhinavxd/libredesk",
-    "donetick/donetick"
+    "donetick/donetick",
+    "open-webui/open-webui",
+    "n8n-io/n8n",
+    "ollama/ollama",
+    "immich-app/immich",
+    "langgenius/dify",
+    "supabase/supabase"
   ],
   "extra_contributions": [
     "honojs/hono",
