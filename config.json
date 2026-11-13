@@ -28,7 +28,10 @@
     "ollama/ollama",
     "immich-app/immich",
     "langgenius/dify",
-    "supabase/supabase"
+    "supabase/supabase",
+    "louislam/uptime-kuma",
+    "home-assistant/core",
+    "Stirling-Tools/Stirling-PDF"
   ],
   "extra_contributions": [
     "honojs/hono",
