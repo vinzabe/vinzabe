@@ -29,9 +29,11 @@
     "immich-app/immich",
     "langgenius/dify",
     "supabase/supabase",
-    "louislam/uptime-kuma",
     "home-assistant/core",
-    "Stirling-Tools/Stirling-PDF"
+    "Stirling-Tools/Stirling-PDF",
+    "grafana/grafana",
+    "syncthing/syncthing",
+    "caddyserver/caddy"
   ],
   "extra_contributions": [
     "honojs/hono",
