@@ -2,6 +2,28 @@
   "user": "vinzabe",
   "name": "Grant Abejar",
   "tagline": "vulnerability research · AI security tooling · reverse engineering",
+  "links": [
+    {
+      "label": "grantabejar.com",
+      "url": "https://grantabejar.com",
+      "icon": "web"
+    },
+    {
+      "label": "@grantinvinzor",
+      "url": "https://x.com/grantinvinzor",
+      "icon": "x"
+    },
+    {
+      "label": "LinkedIn",
+      "url": "https://www.linkedin.com/in/gabejar",
+      "icon": "linkedin"
+    },
+    {
+      "label": "Medium",
+      "url": "https://medium.com/@gabeja1",
+      "icon": "medium"
+    }
+  ],
   "star_list": "security-contribution",
   "card_link": "contribution",
   "contributions": [

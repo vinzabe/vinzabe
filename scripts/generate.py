@@ -22,6 +22,10 @@ every published CVE: any record that points at a featured repo and credits you
 is added to "cves" in config.json. You can also list IDs there yourself, for
 example {"python/cpython": ["CVE-2026-12345"]}. Each one appears once its CVE
 record is public and stays hidden while the ID is only reserved.
+
+The row of links under the header comes from "links" in config.json: each entry
+has a label, a url and an icon ("web", "x", "linkedin" or "medium"; anything
+else gets the globe).
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ CONFIG_PATH = ROOT / "config.json"
 README_PATH = ROOT / "README.md"
 ASSETS = ROOT / "assets"
 CARDS_DIR = ASSETS / "cards"
+LINKS_DIR = ASSETS / "links"
 SNAPSHOT_PATH = ROOT / "data" / "contributions.json"
 
 CONFIG = json.loads(CONFIG_PATH.read_text())
@@ -720,6 +725,47 @@ def chip_svg(c: dict, avatar: str | None, theme: str) -> str:
     return svg_root(W, H, f"{c['repo']}: reported privately", "".join(out))
 
 
+LINK_H = 32
+LINK_SERVICES = {"web": "Website", "x": "X", "linkedin": "LinkedIn", "medium": "Medium"}
+
+
+def link_icon(kind: str, x: float, y: float, t: dict) -> str:
+    """16x16 mark for a profile link. Unknown kinds get the globe."""
+    stroke = f'fill="none" stroke="{t["accent"]}" stroke-width="1.4" stroke-linecap="round"'
+    body = {
+        "web": f'<circle cx="8" cy="8" r="6.3" {stroke}/><ellipse cx="8" cy="8" rx="2.7" ry="6.3" {stroke}/>'
+               f'<path d="M1.7 8h12.6" {stroke}/>',
+        "x": f'<path transform="scale(.6667)" fill="{t["text"]}" d="M18.901 1.153h3.68l-8.04 9.19L24 22.846h-7.406'
+             f'l-5.8-7.584-6.638 7.584H.474l8.6-9.83L0 1.154h7.594l5.243 6.932ZM17.61 20.644h2.039L6.486 3.24H4.298Z"/>',
+        "linkedin": '<rect width="16" height="16" rx="3" fill="#0a66c2"/><circle cx="4.6" cy="4.5" r="1.35" fill="#fff"/>'
+                    '<path d="M4.6 7v5.8M8.2 7v5.8M8.2 9.7a2.15 2.15 0 0 1 4.3 0v3.1" fill="none" stroke="#fff" '
+                    'stroke-width="2.1"/>',
+        "medium": f'<g transform="scale(.6667)" fill="{t["text"]}"><ellipse cx="6.77" cy="12" rx="6.77" ry="6.82"/>'
+                  f'<ellipse cx="17.58" cy="12" rx="3.38" ry="6.42"/><ellipse cx="22.81" cy="12" rx="1.19" ry="5.75"/></g>',
+    }
+    return f'<g transform="translate({x} {y})">{body.get(kind, body["web"])}</g>'
+
+
+def link_alt(link: dict) -> str:
+    service = LINK_SERVICES.get(link.get("icon", "web"), "Website")
+    return link["label"] if link["label"].lower() == service.lower() else f"{service}: {link['label']}"
+
+
+def link_svg(link: dict, theme: str) -> str:
+    """Pill for one profile link: icon and label, sized to the label."""
+    t, H = THEMES[theme], LINK_H
+    W = math.ceil(36 + text_width(link["label"], 13, bold=True) + 15)
+    body = (
+        f'<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{t["bg0"]}"/>'
+        f'<stop offset="1" stop-color="{t["bg1"]}"/></linearGradient></defs>'
+        f'<rect x=".5" y=".5" width="{W - 1}" height="{H - 1}" rx="{(H - 1) / 2}" fill="url(#bg)" stroke="{t["border"]}"/>'
+        + link_icon(link.get("icon", "web"), 12, 8, t)
+        + f'<text x="36" y="20.5" font-family="{SANS}" font-size="13" font-weight="600" '
+          f'fill="{t["text"]}">{esc(link["label"])}</text>'
+    )
+    return svg_root(W, H, link_alt(link), body)
+
+
 def stats_svg(tiles: list[tuple[str, str]], theme: str) -> str:
     t, W, H = THEMES[theme], 820, 92
     tw = W / len(tiles)
@@ -911,9 +957,11 @@ def header_svg(name: str, tagline: str, disclosed: list[str], private_count: int
 
 # ------------------------------------------------------------------ README
 
-def picture(base: str, alt: str, width: str) -> str:
+def picture(base: str, alt: str, width: str | None = None) -> str:
+    """Light/dark image pair. Without a width the image keeps its own size."""
+    size = f' width="{width}"' if width else ""
     return (f'<picture><source media="(prefers-color-scheme: dark)" srcset="{base}-dark.svg">'
-            f'<img src="{base}-light.svg" alt="{esc(alt)}" width="{width}"></picture>')
+            f'<img src="{base}-light.svg" alt="{esc(alt)}"{size}></picture>')
 
 
 def md_cell(s: str) -> str:
@@ -969,9 +1017,29 @@ def contributions_block(cards: list[dict], tiles: list[tuple[str, str]]) -> str:
     return "\n".join(out)
 
 
-def replace_block(text: str, name: str, content: str) -> str:
+def links_block() -> str:
+    """Writes a light and dark pill per link in config.json and returns the README block.
+    Pills keep their own size, so on a phone the row wraps instead of shrinking."""
+    LINKS_DIR.mkdir(parents=True, exist_ok=True)
+    keep, out = set(), []
+    for link in CONFIG.get("links", []):
+        slug = re.sub(r"[^a-z0-9]+", "-", link["label"].lower()).strip("-") or "link"
+        for theme in THEMES:
+            (LINKS_DIR / f"{slug}-{theme}.svg").write_text(link_svg(link, theme))
+            keep.add(f"{slug}-{theme}.svg")
+        out.append(f'<a href="{esc(link["url"])}">{picture(f"assets/links/{slug}", link_alt(link))}</a>')
+    for stale in LINKS_DIR.glob("*.svg"):
+        if stale.name not in keep:
+            stale.unlink()
+    return "\n".join(['<p align="center">', *out, "</p>"]) if out else ""
+
+
+def replace_block(text: str, name: str, content: str, required: bool = True) -> str:
     pattern = re.compile(rf"(<!-- BEGIN:{name}[^>]*-->)(.*?)(<!-- END:{name} -->)", re.S)
     if not pattern.search(text):
+        if not required:
+            log(f"README.md has no {name} markers; leaving it out")
+            return text
         raise SystemExit(f"README.md is missing the <!-- BEGIN:{name} --> / <!-- END:{name} --> markers")
     return pattern.sub(lambda m: f"{m.group(1)}\n{content}\n{m.group(3)}", text, count=1)
 
@@ -1049,6 +1117,7 @@ def main() -> None:
         header_svg(name, CONFIG.get("tagline", ""), disclosed, len(cards) - len(disclosed)))
 
     readme = README_PATH.read_text()
+    readme = replace_block(readme, "links", links_block(), required=False)
     readme = replace_block(readme, "contributions", contributions_block(cards, tiles))
     README_PATH.write_text(readme)
 
