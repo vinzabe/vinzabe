@@ -16,15 +16,18 @@ shown as well, whether or not they're on the list.
 
 A project's card switches from "Reported privately" to the full write-up once
 an advisory crediting you is published there, and its heading becomes the CVE
-ID once one is assigned. For projects that publish CVEs outside GitHub
-(CPython, for one), list the IDs under "cves" in config.json, for example
-{"python/cpython": ["CVE-2026-12345"]}: each one appears once its CVE record is
-public and stays hidden while the ID is only reserved.
+ID once one is assigned. CVEs that projects publish outside GitHub (CPython,
+for one) are found by scanning GitHub's global advisory database, which imports
+every published CVE: any record that points at a featured repo and credits you
+is added to "cves" in config.json. You can also list IDs there yourself, for
+example {"python/cpython": ["CVE-2026-12345"]}. Each one appears once its CVE
+record is public and stays hidden while the ID is only reserved.
 """
 
 from __future__ import annotations
 
 import base64
+import datetime
 import html
 import json
 import math
@@ -48,6 +51,7 @@ LOGIN: str = CONFIG["user"]
 TOKEN = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
 CACHE = Path(os.environ["PROFILE_CACHE"]) if os.environ.get("PROFILE_CACHE") else None
 API = "https://api.github.com"
+CVE_SCAN_DAYS = 3  # days of advisory-database updates scanned per run; runs are 6 hours apart
 
 MONO = "ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace"
 SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans',Helvetica,Arial,sans-serif"
@@ -306,24 +310,77 @@ def normalize_advisory(adv: dict, role: str, repo: dict) -> dict:
     }
 
 
-def cve_advisory(cve_id: str, prev: dict) -> dict | None:
-    """A CVE a project published outside GitHub, from its public CVE record. None while the
-    ID is only reserved (there's no public record yet), so nothing undisclosed shows early."""
-    cve_id = cve_id.strip().upper()
-    last = next((a for a in prev.get("advisories", []) if a.get("cve") == cve_id), None)
+def cve_record(cve_id: str) -> dict | None:
+    """The public CVE record, or None while the ID is only reserved (no public record yet).
+    Network failures raise, so callers can tell "not public" from "couldn't check"."""
     try:
         rec = json.loads(fetch(f"https://cveawg.mitre.org/api/cve/{cve_id}", accept="application/json")[0])
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
-        log(f"{cve_id}: CVE record unavailable ({exc}); keeping the last snapshot")
-        return last
+        raise
+    return rec if (rec.get("cveMetadata") or {}).get("state") == "PUBLISHED" else None
+
+
+def credits_you(cve_id: str) -> bool:
+    """Whether a published CVE record credits you, by GitHub login or by your name."""
+    try:
+        rec = cve_record(cve_id)
+    except (urllib.error.URLError, OSError):
+        return False
+    if not rec:
+        return False
+    containers = rec.get("containers") or {}
+    names = [cr.get("value") or "" for c in [containers.get("cna") or {}, *(containers.get("adp") or [])]
+             for cr in c.get("credits") or []]
+    me = rf"\b{re.escape(LOGIN)}\b" + (rf"|\b{re.escape(CONFIG['name'])}\b" if CONFIG.get("name") else "")
+    return any(re.search(me, n, re.I) for n in names)
+
+
+def discover_cves(repos: list[str]) -> None:
+    """Add CVEs that credit you, for any featured repo, to config.json "cves". GitHub's global
+    advisory database imports every published CVE, whoever assigned it (the PSF for CPython,
+    say), so the last few days of it are scanned on each run; IDs found stay in config.json,
+    so the window can be short."""
+    wanted = {r.lower(): r for r in repos}
+    cves = CONFIG.setdefault("cves", {})
+    known = {cve.upper() for ids in cves.values() for cve in ids}
+    since = (datetime.date.today() - datetime.timedelta(days=CVE_SCAN_DAYS)).isoformat()
+    found = []
+    for kind in ("reviewed", "unreviewed"):
+        try:
+            advisories = api_list("/advisories", max_pages=60, type=kind, updated=f">={since}", per_page=100)
+        except (urllib.error.URLError, OSError) as exc:
+            log(f"CVE scan skipped ({exc})")
+            return
+        for adv in advisories:
+            cve = (adv.get("cve_id") or "").upper()
+            if not cve or cve in known:
+                continue
+            links = " ".join([adv.get("source_code_location") or ""] + [str(u) for u in adv.get("references") or []])
+            repo = next((wanted[m.lower()] for m in re.findall(r"github\.com/([\w.-]+/[\w.-]+)", links)
+                         if m.lower() in wanted), None)
+            if repo and credits_you(cve):
+                cves.setdefault(repo, []).append(cve)
+                known.add(cve)
+                found.append(f"{cve} ({repo})")
+    log(f"CVE scan since {since}: " + (", ".join(found) if found else "nothing new"))
+    if found:
+        CONFIG_PATH.write_text(json.dumps(CONFIG, indent=2, ensure_ascii=False) + "\n")
+
+
+def cve_advisory(cve_id: str, prev: dict) -> dict | None:
+    """A CVE a project published outside GitHub, from its public CVE record. None while the
+    ID is only reserved (there's no public record yet), so nothing undisclosed shows early."""
+    cve_id = cve_id.strip().upper()
+    try:
+        rec = cve_record(cve_id)
     except (urllib.error.URLError, OSError) as exc:
         log(f"{cve_id}: CVE record unavailable ({exc}); keeping the last snapshot")
-        return last
-    meta, containers = rec.get("cveMetadata") or {}, rec.get("containers") or {}
-    if meta.get("state") != "PUBLISHED":
+        return next((a for a in prev.get("advisories", []) if a.get("cve") == cve_id), None)
+    if not rec:
         return None
+    meta, containers = rec.get("cveMetadata") or {}, rec.get("containers") or {}
     cna = containers.get("cna") or {}
     metrics = [m for c in [cna, *(containers.get("adp") or [])] for m in c.get("metrics") or []]
     cvss = next((m[k] for k in ("cvssV4_0", "cvssV3_1", "cvssV3_0") for m in metrics if k in m), {})
@@ -340,7 +397,7 @@ def cve_advisory(cve_id: str, prev: dict) -> dict | None:
         "cve": cve_id,
         "severity": severity if severity in SEVERITY_RANK else "",  # "" = no CVSS score published
         "score": score,
-        "title": (cna.get("title") or re.split(r"(?<=[.!?])\s", desc.strip(), maxsplit=1)[0]).strip(),
+        "title": (cna.get("title") or re.split(r"(?<=[.!?])\s", desc.strip(), maxsplit=1)[0]).replace("`", "").strip(),
         "url": f"https://www.cve.org/CVERecord?id={cve_id}",
         "date": (meta.get("datePublished") or "")[:10],
         "role": "reporter",
@@ -625,6 +682,44 @@ def card_svg(c: dict, p: dict, avatar: str | None, theme: str) -> str:
     return svg_root(W, H, title, "".join(out))
 
 
+CHIP_W, CHIP_H = 264, 54
+
+
+def chip_svg(c: dict, avatar: str | None, theme: str) -> str:
+    """Small tile for a project with only private reports: the project, nothing about the finding.
+    Shown three to a row, so a long list of reports stays short to scroll."""
+    t, W, H = THEMES[theme], CHIP_W, CHIP_H
+    owner, name = c["repo"].split("/", 1)
+    ax, ay, size, tx = 13, 13, 28, 51
+    out = [
+        "<defs>",
+        f'<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{t["bg0"]}"/>'
+        f'<stop offset="1" stop-color="{t["bg1"]}"/></linearGradient>',
+        f'<clipPath id="av"><rect x="{ax}" y="{ay}" width="{size}" height="{size}" rx="7"/></clipPath>',
+        "</defs>",
+        f'<rect x=".5" y=".5" width="{W - 1}" height="{H - 1}" rx="9.5" fill="url(#bg)" stroke="{t["border"]}"/>',
+    ]
+    if avatar:
+        out.append(f'<image x="{ax}" y="{ay}" width="{size}" height="{size}" href="{avatar}" xlink:href="{avatar}" '
+                   f'clip-path="url(#av)" preserveAspectRatio="xMidYMid slice"/>')
+    else:
+        out.append(f'<rect x="{ax}" y="{ay}" width="{size}" height="{size}" rx="7" fill="{t["rule"]}"/>'
+                   f'<text x="{ax + size / 2}" y="{ay + 19}" text-anchor="middle" font-family="{SANS}" font-size="13" '
+                   f'font-weight="700" fill="{t["muted"]}">{esc(owner[:1].upper())}</text>')
+    out.append(f'<rect x="{ax}" y="{ay}" width="{size}" height="{size}" rx="7" fill="none" stroke="{t["border"]}"/>')
+    out.append(icon("lock", W - 29, (H - 16) / 2, t["faint"]))
+    room = W - tx - 38
+    out.append(f'<text x="{tx}" y="24.5" font-family="{SANS}" font-size="13.5" font-weight="600" '
+               f'fill="{t["text"]}">{esc(ellipsize(name, room, 13.5, bold=True))}</text>')
+    stars = short_num(c["stars"])
+    owner_txt = ellipsize(owner, room - text_width(stars, 11, mono=True) - 26, 11.5)
+    sx = tx + text_width(owner_txt, 11.5) + 13
+    out.append(f'<text x="{tx}" y="41" font-family="{SANS}" font-size="11.5" fill="{t["muted"]}">{esc(owner_txt)}</text>')
+    out.append(star(sx, 37, 4.6, t["medium"] if theme == "dark" else "#bf8700"))
+    out.append(f'<text x="{sx + 7.5:.1f}" y="41" font-family="{MONO}" font-size="11" fill="{t["muted"]}">{stars}</text>')
+    return svg_root(W, H, f"{c['repo']}: reported privately", "".join(out))
+
+
 def stats_svg(tiles: list[tuple[str, str]], theme: str) -> str:
     t, W, H = THEMES[theme], 820, 92
     tw = W / len(tiles)
@@ -659,8 +754,9 @@ def hidden_until(t: float, attr: str = "opacity", value: str = "0") -> str:
     return f'<set attributeName="{attr}" to="{value}" begin="0s" end="{t:.2f}s"/>'
 
 
-def header_svg(name: str, tagline: str, repo_names: list[str]) -> str:
-    """A terminal that types out who you are and which projects you've contributed to."""
+def header_svg(name: str, tagline: str, disclosed: list[str], private_count: int) -> str:
+    """A terminal that types out who you are, which projects have public findings and how
+    many more have reports still private."""
     W, size, cw, lh, x0 = 860, 15, 9.0, 27, 26
     green, blue, white, grey, purple = "#3fb950", "#58a6ff", "#e6edf3", "#8b949e", "#d2a8ff"
     prompt = [(f"{LOGIN}@github", green), (":", white), ("~", blue), ("$", white)]
@@ -679,20 +775,31 @@ def header_svg(name: str, tagline: str, repo_names: list[str]) -> str:
         focus_rows.append(row_txt)
 
     ls_rows, row, used = [], [], 0
-    for n in repo_names:
+    for n in disclosed:
         if row and used + 2 + len(n) > cols:
             ls_rows.append(row)
             row, used = [], 0
-        row.append((used + (2 if row else 0), n))
+        row.append((used + (2 if row else 0), n, blue, True))
         used += (2 if len(row) > 1 else 0) + len(n)
     if row:
         ls_rows.append(row)
+    if len(ls_rows) > 2:  # keep the header short: two rows of names, then a count of the rest
+        hidden, ls_rows = sum(len(r) for r in ls_rows[2:]), ls_rows[:2]
+        last = ls_rows[1]
+        while last and last[-1][0] + len(last[-1][1]) + 2 + len(f"+{hidden} more") > cols:
+            last.pop()
+            hidden += 1
+        end = last[-1][0] + len(last[-1][1]) + 2 if last else 0
+        last.append((end, f"+{hidden} more", grey, False))
 
     script = [
         ("whoami", [[(0, name, white, True), (len(name) + 2, f"@{LOGIN}", grey, False)]]),
         ("cat focus.txt", [[(0, r, purple, False)] for r in focus_rows]),
-        ("ls security-contributions/", [[(col, n, blue, True) for col, n in r] for r in ls_rows]),
     ]
+    if disclosed:
+        script.append(("ls disclosed/", ls_rows))
+    if private_count:
+        script.append(("ls reported-privately/ | wc -l", [[(0, str(private_count), white, True)]]))
     n_lines = sum(1 + len(outs) for _, outs in script) + 1
     H = 36 + 32 + (n_lines - 1) * lh + 24
 
@@ -797,7 +904,8 @@ def header_svg(name: str, tagline: str, repo_names: list[str]) -> str:
         f'<animate attributeName="stroke-dashoffset" values="62;62;0" keyTimes="0;{t / (t + 0.6):.3f};1" '
         f'dur="{t + 0.6:.2f}s" fill="freeze"/></path></g>'
     )
-    title = f"{LOGIN}@github:~$ whoami: {name}. {tagline}. Security contributions: {', '.join(repo_names)}"
+    title = (f"{LOGIN}@github:~$ whoami: {name}. {tagline}. Disclosed: {', '.join(disclosed) or 'none yet'}. "
+             f"Reported privately: {private_count} projects.")
     return svg_root(W, H, title, f"<defs>{chrome}{''.join(defs)}</defs>{frame}{emblem}{''.join(body)}")
 
 
@@ -813,7 +921,8 @@ def md_cell(s: str) -> str:
     return re.sub(r"([\\|\[\]*_`])", r"\\\1", s)
 
 
-def card_grid(cards: list[dict]) -> list[str]:
+def card_grid(cards: list[dict], width: str) -> list[str]:
+    """Cards sized as a share of the README's width, so the columns hold at any window size."""
     out = ['<p align="center">']
     link_to = CONFIG.get("card_link", "contribution")
     for c in cards:
@@ -821,7 +930,7 @@ def card_grid(cards: list[dict]) -> list[str]:
         href = p["url"] if link_to == "contribution" else c["url"]
         alt = f"{c['repo']}: {p['heading']}" + (f" ({p['badge'].lower()})" if p["badge"] else "")
         alt += f". {p['title']}" if p["title"] else ""
-        out.append(f'<a href="{esc(href)}">{picture(c["card"], alt, str(CARD_W))}</a>')
+        out.append(f'<a href="{esc(href)}">{picture(c["card"], alt, width)}</a>')
     return out + ["</p>"]
 
 
@@ -831,13 +940,13 @@ def contributions_block(cards: list[dict], tiles: list[tuple[str, str]]) -> str:
     private = [c for c in cards if c["primary"].get("private")]
     if public and private:
         out += ["", "### Disclosed", ""]
-    out += card_grid(public)
+    out += card_grid(public, "49%")  # two to a row
     if private:
         if public:
             out += ["", "### Reported privately", ""]
         out += ["Sent through GitHub's private vulnerability reporting. Details stay private until each "
-                "advisory is published, then the card switches to the full write-up.", ""]
-        out += card_grid(private)
+                "advisory is published, then the project moves up to Disclosed with the full write-up.", ""]
+        out += card_grid(private, "32%")  # three to a row
 
     rows = []
     for c in cards:
@@ -877,6 +986,8 @@ def main() -> None:
     repos = featured_repos()
     if not repos:
         raise SystemExit("No repositories to feature: add some to config.json 'contributions'.")
+    if TOKEN:  # anonymous requests (60 an hour) can't cover the scan
+        discover_cves(repos)
     items = my_issues_and_prs()
 
     cards = []
@@ -898,7 +1009,8 @@ def main() -> None:
                               sum(i["status"] in ("merged", "fixed") for i in c["items"]) + len(c["advisories"]),
                               c["stars"]), reverse=True)
 
-    # Cards (light + dark), removing ones for projects no longer featured.
+    # Cards (light + dark): full cards for public findings, small tiles for private reports.
+    # Ones for projects no longer featured are removed.
     CARDS_DIR.mkdir(parents=True, exist_ok=True)
     keep = set()
     for c in cards:
@@ -907,20 +1019,24 @@ def main() -> None:
         avatar = avatar_data_uri(c["avatar_url"])
         for theme in THEMES:
             path = CARDS_DIR / f"{slug}-{theme}.svg"
-            path.write_text(card_svg(c, c["primary"], avatar, theme))
+            private = c["primary"].get("private")
+            path.write_text(chip_svg(c, avatar, theme) if private else card_svg(c, c["primary"], avatar, theme))
             keep.add(path.name)
     for stale in CARDS_DIR.glob("*.svg"):
         if stale.name not in keep:
             stale.unlink()
 
     advisories = sum(len(c["advisories"]) for c in cards)
+    cve_ids = {a["cve"] for c in cards for a in c["advisories"] if a.get("cve")}
     resolved = advisories + sum(i["status"] in ("merged", "fixed") for c in cards for i in c["items"])
     tiles = [(str(len(cards)), "projects" if len(cards) != 1 else "project")]
+    if cve_ids:
+        tiles.append((str(len(cve_ids)), "CVEs" if len(cve_ids) != 1 else "CVE"))
     if advisories:
-        tiles.append((str(advisories), "published advisories" if advisories != 1 else "published advisory"))
+        tiles.append((str(advisories), "advisories" if advisories != 1 else "advisory"))
     if resolved > advisories:
         tiles.append((str(resolved), "fixed upstream"))
-    tiles.append((short_num(sum(c["stars"] for c in cards)), "stars across projects"))
+    tiles.append((short_num(sum(c["stars"] for c in cards)), "combined stars"))
     for theme in THEMES:
         (ASSETS / f"stats-{theme}.svg").write_text(stats_svg(tiles, theme))
 
@@ -928,7 +1044,9 @@ def main() -> None:
     short_names = [c["repo"].split("/")[1] for c in cards]
     if len(set(n.lower() for n in short_names)) != len(short_names):
         short_names = [c["repo"].replace("/", "-") for c in cards]
-    (ASSETS / "header.svg").write_text(header_svg(name, CONFIG.get("tagline", ""), short_names))
+    disclosed = [n for n, c in zip(short_names, cards) if not c["primary"].get("private")]
+    (ASSETS / "header.svg").write_text(
+        header_svg(name, CONFIG.get("tagline", ""), disclosed, len(cards) - len(disclosed)))
 
     readme = README_PATH.read_text()
     readme = replace_block(readme, "contributions", contributions_block(cards, tiles))
