@@ -24,8 +24,8 @@ example {"python/cpython": ["CVE-2026-12345"]}. Each one appears once its CVE
 record is public and stays hidden while the ID is only reserved.
 
 The row of links under the header comes from "links" in config.json: each entry
-has a label, a url and an icon ("web", "x", "linkedin" or "medium"; anything
-else gets the globe).
+has a label, a url and an icon ("web", "linkedin", "bugcrowd", "x" or "medium";
+anything else gets the globe). "role" is printed next to your name in the header.
 """
 
 from __future__ import annotations
@@ -726,7 +726,7 @@ def chip_svg(c: dict, avatar: str | None, theme: str) -> str:
 
 
 LINK_H = 32
-LINK_SERVICES = {"web": "Website", "x": "X", "linkedin": "LinkedIn", "medium": "Medium"}
+LINK_SERVICES = {"web": "Website", "x": "X", "linkedin": "LinkedIn", "medium": "Medium", "bugcrowd": "Bugcrowd"}
 
 
 def link_icon(kind: str, x: float, y: float, t: dict) -> str:
@@ -742,6 +742,11 @@ def link_icon(kind: str, x: float, y: float, t: dict) -> str:
                     'stroke-width="2.1"/>',
         "medium": f'<g transform="scale(.6667)" fill="{t["text"]}"><ellipse cx="6.77" cy="12" rx="6.77" ry="6.82"/>'
                   f'<ellipse cx="17.58" cy="12" rx="3.38" ry="6.42"/><ellipse cx="22.81" cy="12" rx="1.19" ry="5.75"/></g>',
+        # A plain bug in Bugcrowd orange (legs and antennae, then body and head, then the wing split).
+        "bugcrowd": '<path d="M4.6 7.4 2 6M4.4 9.8H1.6M4.7 12.3 2.3 14M11.4 7.4 14 6M11.6 9.8h2.8M11.3 12.3 13.7 14'
+                    'M6.9 2.4 5.8 1M9.1 2.4 10.2 1" fill="none" stroke="#f26822" stroke-width="1.3" stroke-linecap="round"/>'
+                    '<ellipse cx="8" cy="9.6" rx="3.5" ry="4.6" fill="#f26822"/><circle cx="8" cy="4.1" r="2.1" fill="#f26822"/>'
+                    f'<path d="M8 6.7v7.3" stroke="{t["bg0"]}" stroke-width="1"/>',
     }
     return f'<g transform="translate({x} {y})">{body.get(kind, body["web"])}</g>'
 
@@ -800,7 +805,7 @@ def hidden_until(t: float, attr: str = "opacity", value: str = "0") -> str:
     return f'<set attributeName="{attr}" to="{value}" begin="0s" end="{t:.2f}s"/>'
 
 
-def header_svg(name: str, tagline: str, disclosed: list[str], private_count: int) -> str:
+def header_svg(name: str, role: str, tagline: str, disclosed: list[str], private_count: int) -> str:
     """A terminal that types out who you are, which projects have public findings and how
     many more have reports still private."""
     W, size, cw, lh, x0 = 860, 15, 9.0, 27, 26
@@ -839,7 +844,7 @@ def header_svg(name: str, tagline: str, disclosed: list[str], private_count: int
         last.append((end, f"+{hidden} more", grey, False))
 
     script = [
-        ("whoami", [[(0, name, white, True), (len(name) + 2, f"@{LOGIN}", grey, False)]]),
+        ("whoami", [[(0, name, white, True), (len(name) + 2, role or f"@{LOGIN}", grey, False)]]),
         ("cat focus.txt", [[(0, r, purple, False)] for r in focus_rows]),
     ]
     if disclosed:
@@ -950,7 +955,8 @@ def header_svg(name: str, tagline: str, disclosed: list[str], private_count: int
         f'<animate attributeName="stroke-dashoffset" values="62;62;0" keyTimes="0;{t / (t + 0.6):.3f};1" '
         f'dur="{t + 0.6:.2f}s" fill="freeze"/></path></g>'
     )
-    title = (f"{LOGIN}@github:~$ whoami: {name}. {tagline}. Disclosed: {', '.join(disclosed) or 'none yet'}. "
+    title = (f"{LOGIN}@github:~$ whoami: {name}{', ' + role if role else ''}. {tagline}. "
+             f"Disclosed: {', '.join(disclosed) or 'none yet'}. "
              f"Reported privately: {private_count} projects.")
     return svg_root(W, H, title, f"<defs>{chrome}{''.join(defs)}</defs>{frame}{emblem}{''.join(body)}")
 
@@ -1114,7 +1120,7 @@ def main() -> None:
         short_names = [c["repo"].replace("/", "-") for c in cards]
     disclosed = [n for n, c in zip(short_names, cards) if not c["primary"].get("private")]
     (ASSETS / "header.svg").write_text(
-        header_svg(name, CONFIG.get("tagline", ""), disclosed, len(cards) - len(disclosed)))
+        header_svg(name, CONFIG.get("role", ""), CONFIG.get("tagline", ""), disclosed, len(cards) - len(disclosed)))
 
     readme = README_PATH.read_text()
     readme = replace_block(readme, "links", links_block(), required=False)

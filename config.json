@@ -1,7 +1,8 @@
 {
   "user": "vinzabe",
   "name": "Grant Abejar",
-  "tagline": "vulnerability research · AI security tooling · reverse engineering",
+  "role": "security engineer & penetration tester",
+  "tagline": "vuln research · bug bounty · AI security · reverse engineering",
   "links": [
     {
       "label": "grantabejar.com",
@@ -14,14 +15,9 @@
       "icon": "linkedin"
     },
     {
-      "label": "@grantinvinzor",
-      "url": "https://x.com/grantinvinzor",
-      "icon": "x"
-    },
-    {
-      "label": "Medium",
-      "url": "https://medium.com/@gabeja1",
-      "icon": "medium"
+      "label": "Bugcrowd",
+      "url": "https://bugcrowd.com/h/x3c",
+      "icon": "bugcrowd"
     }
   ],
   "star_list": "security-contribution",
