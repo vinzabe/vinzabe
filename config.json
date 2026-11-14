@@ -9,14 +9,14 @@
       "icon": "web"
     },
     {
-      "label": "@grantinvinzor",
-      "url": "https://x.com/grantinvinzor",
-      "icon": "x"
-    },
-    {
       "label": "LinkedIn",
       "url": "https://www.linkedin.com/in/gabejar",
       "icon": "linkedin"
+    },
+    {
+      "label": "@grantinvinzor",
+      "url": "https://x.com/grantinvinzor",
+      "icon": "x"
     },
     {
       "label": "Medium",
